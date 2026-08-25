@@ -95,7 +95,12 @@
 		showRightArrow = scrollLeft < scrollWidth - clientWidth - 10;
 
 		// Load more when we're close to the end (within 200px)
-		if (endpoint && hasMore && Date.now() >= retryAfter && scrollWidth - (scrollLeft + clientWidth) < 200) {
+		if (
+			endpoint &&
+			hasMore &&
+			Date.now() >= retryAfter &&
+			scrollWidth - (scrollLeft + clientWidth) < 200
+		) {
 			loadMore();
 		}
 	}
@@ -133,7 +138,7 @@
 					viewBox="0 0 24 24"
 					stroke="currentColor"
 				>
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7 7 7" />
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
 				</svg>
 			</a>
 		{/if}
