@@ -208,7 +208,9 @@
 			class="btn gap-1.5 btn-ghost text-base-content/60 btn-sm"
 		>
 			<ArrowLeft size={16} />
-			<span class="sm:inline">{libraryName ?? m.library_movieHeader_backToLibrary()}</span>
+			<span class="sm:inline">
+				{`${m.library_movieHeader_backToLibrary()}${libraryName ?? m.library_tv_heading()}`}
+			</span>
 		</a>
 		<div class="flex shrink-0 items-center gap-1 sm:gap-2">
 			<!-- MonitorToggle hidden on mobile (shown in bottom bar) -->

@@ -70,7 +70,7 @@
 	// Selection state
 	let selectedMovies = new SvelteSet<string>();
 	let showCheckboxes = $state(false);
-	let searchQuery = $state('');
+	let searchQuery = $state(page.url.searchParams.get('q') ?? '');
 	let collapsedGroups = new SvelteSet<string>();
 	let drawerOpen = $state(false);
 	let collectionSubtitleAutoSearching = new SvelteSet<number>();
@@ -114,6 +114,16 @@
 			collapsedGroups.add(key);
 		}
 	}
+
+	// Keep the local title search in the URL so detail navigation can restore it too.
+	// Native replaceState avoids a SvelteKit navigation/reload on every keystroke.
+	$effect(() => {
+		const query = searchQuery.trim();
+		const url = new URL(window.location.href);
+		if (query) url.searchParams.set('q', query);
+		else url.searchParams.delete('q');
+		history.replaceState(history.state, '', url.pathname + url.search);
+	});
 
 	const filteredMovies = $derived(
 		searchQuery.trim()
@@ -526,6 +536,9 @@
 
 	function updateUrlParam(key: string, value: string) {
 		const url = new URL(page.url);
+		const query = searchQuery.trim();
+		if (query) url.searchParams.set('q', query);
+		else url.searchParams.delete('q');
 		if (key === 'library') {
 			if (!value || value === defaultLibrarySlug) {
 				url.searchParams.delete(key);
@@ -545,6 +558,8 @@
 		if (data.libraryScope?.isSubLibraryScope && data.libraryScope?.selected?.slug) {
 			url.searchParams.set('library', data.libraryScope.selected.slug);
 		}
+		const query = searchQuery.trim();
+		if (query) url.searchParams.set('q', query);
 		goto(resolvePath(url.pathname + url.search), { keepFocus: true, noScroll: true });
 	}
 
