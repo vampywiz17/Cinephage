@@ -3,9 +3,9 @@
 # Triggers:
 # - Pull requests to dev: Build only (validates Docker image)
 # - Push to dev: Build and push preview tags (dev, dev-YYYYMMDD-RUN)
+# - Push to fix/discover-sectionrow-rate-limit-loop: Build and push isolated test tags
 # - Push to main: Build only validation with no image publication
 # - Stable publication happens only when called from the stable release workflow with release_tag
-# - Runs on pushes to main/dev, pull requests to dev, and stable release workflow calls
 #
 # Images are pushed to ghcr.io/<owner>/cinephage
 #
@@ -27,7 +27,9 @@ on:
         type: string
         default: ''
   push:
-    branches: [dev]
+    branches:
+      - dev
+      - fix/discover-sectionrow-rate-limit-loop
   pull_request:
     branches: [main, dev]
 
@@ -62,6 +64,9 @@ jobs:
             SHOULD_PUBLISH='true'
           elif [ "${{ github.ref }}" = "refs/heads/dev" ]; then
             APP_VERSION="dev-${RUN_DATE}-${{ github.run_number }}"
+            SHOULD_PUBLISH='true'
+          elif [ "${{ github.ref }}" = "refs/heads/fix/discover-sectionrow-rate-limit-loop" ]; then
+            APP_VERSION="fix-discover-rate-limit-${RUN_DATE}-${{ github.run_number }}"
             SHOULD_PUBLISH='true'
           else
             APP_VERSION="sha-${GITHUB_SHA::7}"
@@ -231,6 +236,8 @@ jobs:
             type=raw,value=latest,enable=${{ inputs.release_tag != '' }}
             type=raw,value=dev-${{ needs.prepare.outputs.run_date }}-${{ github.run_number }},enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=fix-discover-rate-limit-${{ needs.prepare.outputs.run_date }}-${{ github.run_number }},enable=${{ github.ref == 'refs/heads/fix/discover-sectionrow-rate-limit-loop' }}
+            type=raw,value=fix-discover-rate-limit,enable=${{ github.ref == 'refs/heads/fix/discover-sectionrow-rate-limit-loop' }}
           labels: |
             org.opencontainers.image.title=Cinephage
             org.opencontainers.image.description=Self-hosted media management application
