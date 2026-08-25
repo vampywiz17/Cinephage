@@ -25,31 +25,30 @@ export function getLibraryNavigationContext(pathname: string): LibraryNavigation
 	return null;
 }
 
-export function isSafeStoredLibraryReturn(
-	value: string | null,
-	listPath: LibraryNavigationContext['listPath']
-): value is string {
-	if (!value || !value.startsWith('/') || value.startsWith('//')) return false;
+/**
+ * Build the canonical detail URL for a navigation originating from a library list.
+ * The exact list pathname + query string is written into returnTo so the detail
+ * page can restore every active filter, sort option, sub-library, and text search.
+ */
+export function getLibraryDetailWithReturnTo(
+	fromPathname: string,
+	fromSearch: string,
+	target: string
+): string | null {
+	const from = getLibraryNavigationContext(fromPathname);
+	if (!from || from.kind !== 'list') return null;
 
 	try {
-		const url = new URL(value, 'http://cinephage.local');
-		return url.origin === 'http://cinephage.local' && url.pathname === listPath;
+		const targetUrl = new URL(target, 'http://cinephage.local');
+		if (targetUrl.origin !== 'http://cinephage.local') return null;
+
+		const to = getLibraryNavigationContext(targetUrl.pathname);
+		if (!to || to.kind !== 'detail' || to.section !== from.section) return null;
+
+		const returnTo = `${fromPathname}${fromSearch}`;
+		targetUrl.searchParams.set('returnTo', returnTo);
+		return `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
 	} catch {
-		return false;
+		return null;
 	}
-}
-
-export function shouldRestoreStoredLibraryReturn(
-	fromPathname: string,
-	toPathname: string,
-	storedReturn: string | null
-): storedReturn is string {
-	const from = getLibraryNavigationContext(fromPathname);
-	const to = getLibraryNavigationContext(toPathname);
-
-	if (!from || !to) return false;
-	if (from.kind !== 'detail' || to.kind !== 'list') return false;
-	if (from.section !== to.section) return false;
-
-	return isSafeStoredLibraryReturn(storedReturn, to.listPath);
 }
