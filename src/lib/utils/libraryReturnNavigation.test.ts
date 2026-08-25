@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-	getLibraryNavigationContext,
-	isSafeStoredLibraryReturn,
-	shouldRestoreStoredLibraryReturn
+	getLibraryDetailWithReturnTo,
+	getLibraryNavigationContext
 } from './libraryReturnNavigation';
 
 describe('library return navigation', () => {
@@ -30,46 +29,54 @@ describe('library return navigation', () => {
 		});
 	});
 
-	it('accepts complete filtered TV URLs', () => {
-		expect(
-			isSafeStoredLibraryReturn(
-				'/library/tv?library=anime&status=continuing&progress=missing&sort=year-desc&q=voyager',
-				'/library/tv'
-			)
-		).toBe(true);
+	it('rewrites TV detail navigation with the exact filtered TV list URL', () => {
+		const result = getLibraryDetailWithReturnTo(
+			'/library/tv',
+			'?library=anime&status=continuing&progress=missing&sort=year-desc&q=voyager',
+			'/library/tv/series-id'
+		);
+
+		const url = new URL(result!, 'http://cinephage.local');
+		expect(url.pathname).toBe('/library/tv/series-id');
+		expect(url.searchParams.get('returnTo')).toBe(
+			'/library/tv?library=anime&status=continuing&progress=missing&sort=year-desc&q=voyager'
+		);
 	});
 
-	it('accepts complete filtered Movies URLs', () => {
-		expect(
-			isSafeStoredLibraryReturn(
-				'/library/movies?library=anime&fileStatus=missingFile&resolution=2160p&sort=added-desc&q=alien',
-				'/library/movies'
-			)
-		).toBe(true);
+	it('rewrites movie detail navigation with the exact filtered Movies list URL', () => {
+		const result = getLibraryDetailWithReturnTo(
+			'/library/movies',
+			'?library=anime&fileStatus=missingFile&resolution=2160p&sort=added-desc&q=alien',
+			'/library/movie/movie-id'
+		);
+
+		const url = new URL(result!, 'http://cinephage.local');
+		expect(url.pathname).toBe('/library/movie/movie-id');
+		expect(url.searchParams.get('returnTo')).toBe(
+			'/library/movies?library=anime&fileStatus=missingFile&resolution=2160p&sort=added-desc&q=alien'
+		);
 	});
 
-	it('restores TV detail back to the stored TV list state', () => {
+	it('does not cross Movies and TV navigation', () => {
 		expect(
-			shouldRestoreStoredLibraryReturn(
-				'/library/tv/series-id',
+			getLibraryDetailWithReturnTo(
+				'/library/movies',
+				'?fileStatus=missingFile',
+				'/library/tv/series-id'
+			)
+		).toBeNull();
+	});
+
+	it('rejects non-library and external targets', () => {
+		expect(
+			getLibraryDetailWithReturnTo('/library/tv', '?status=ended', '/settings/system/general')
+		).toBeNull();
+		expect(
+			getLibraryDetailWithReturnTo(
 				'/library/tv',
-				'/library/tv?status=ended&resolution=1080p&sort=size-desc&q=trek'
+				'?status=ended',
+				'https://example.com/library/tv/series-id'
 			)
-		).toBe(true);
-	});
-
-	it('does not cross Movies and TV return states', () => {
-		expect(
-			shouldRestoreStoredLibraryReturn(
-				'/library/tv/series-id',
-				'/library/tv',
-				'/library/movies?fileStatus=missingFile'
-			)
-		).toBe(false);
-	});
-
-	it('rejects external return targets', () => {
-		expect(isSafeStoredLibraryReturn('https://example.com/library/tv', '/library/tv')).toBe(false);
-		expect(isSafeStoredLibraryReturn('//example.com/library/tv', '/library/tv')).toBe(false);
+		).toBeNull();
 	});
 });
