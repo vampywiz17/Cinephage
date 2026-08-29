@@ -21,6 +21,11 @@ on:
         required: false
         type: string
         default: ''
+      test_tag:
+        description: 'Non-release GHCR tag for test images'
+        required: false
+        type: string
+        default: ''
       checkout_ref:
         description: 'Git ref to checkout (defaults to workflow ref)'
         required: false
@@ -59,6 +64,9 @@ jobs:
 
           if [ -n "${{ inputs.release_tag }}" ]; then
             APP_VERSION="${{ inputs.release_tag }}"
+            SHOULD_PUBLISH='true'
+          elif [ -n "${{ inputs.test_tag }}" ]; then
+            APP_VERSION="${{ inputs.test_tag }}"
             SHOULD_PUBLISH='true'
           elif [ "${{ github.ref }}" = "refs/heads/dev" ]; then
             APP_VERSION="dev-${RUN_DATE}-${{ github.run_number }}"
@@ -229,6 +237,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
             type=semver,pattern={{major}},value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
             type=raw,value=latest,enable=${{ inputs.release_tag != '' }}
+            type=raw,value=${{ inputs.test_tag }},enable=${{ inputs.test_tag != '' }}
             type=raw,value=dev-${{ needs.prepare.outputs.run_date }}-${{ github.run_number }},enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
           labels: |

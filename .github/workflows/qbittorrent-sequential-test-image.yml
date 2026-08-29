@@ -1,0 +1,15 @@
+name: qBittorrent Sequential Test Image
+
+on:
+  push:
+    branches: [build/qbittorrent-sequential-image]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      test_tag: qbittorrent-sequential-test
