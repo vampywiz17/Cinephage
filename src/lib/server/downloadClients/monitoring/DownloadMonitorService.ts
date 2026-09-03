@@ -8,7 +8,8 @@
 
 import { EventEmitter } from 'events';
 import { randomUUID } from 'node:crypto';
-import { stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { db } from '$lib/server/db';
 import {
 	downloadQueue,
@@ -149,6 +150,52 @@ export function buildTorrentRecoveryPath(
 	const lastComponent = parts[parts.length - 1];
 	if (!lastComponent) return null;
 	return `${normalizedBase}/${normalizedCategory}/${lastComponent}`;
+}
+
+function getDownloadContentPath(download: DownloadInfo, protocol: string): string | null {
+	return download.contentPath || (protocol === 'torrent' ? null : download.savePath) || null;
+}
+
+function isSameOrDescendant(candidatePath: string, parentPath: string): boolean {
+	const pathFromParent = relative(resolve(parentPath), resolve(candidatePath));
+	return (
+		pathFromParent === '' ||
+		(!pathFromParent.startsWith(`..${sep}`) &&
+			pathFromParent !== '..' &&
+			!isAbsolute(pathFromParent))
+	);
+}
+
+function isSamePath(firstPath: string, secondPath: string): boolean {
+	return relative(resolve(firstPath), resolve(secondPath)) === '';
+}
+
+async function getPathFootprint(candidatePath: string): Promise<{
+	logicalBytes: number;
+	allocatedBytes: number;
+	fileCount: number;
+}> {
+	const stats = await stat(candidatePath);
+	if (!stats.isDirectory()) {
+		return {
+			logicalBytes: stats.size,
+			allocatedBytes: stats.blocks * 512,
+			fileCount: stats.isFile() ? 1 : 0
+		};
+	}
+
+	let logicalBytes = 0;
+	let allocatedBytes = 0;
+	let fileCount = 0;
+	for (const entry of await readdir(candidatePath, { withFileTypes: true })) {
+		if (entry.isSymbolicLink()) continue;
+		const footprint = await getPathFootprint(join(candidatePath, entry.name));
+		logicalBytes += footprint.logicalBytes;
+		allocatedBytes += footprint.allocatedBytes;
+		fileCount += footprint.fileCount;
+	}
+
+	return { logicalBytes, allocatedBytes, fileCount };
 }
 
 /**
@@ -1517,13 +1564,16 @@ export class DownloadMonitorService extends EventEmitter implements BackgroundSe
 		// contentPath is the actual location of the downloaded files
 		// savePath is just the parent directory
 		// Use user-configured path mappings for both completed and temp folders
-		const outputPath = mapClientPathToLocal(
-			download.contentPath || download.savePath,
-			client.downloadPathLocal,
-			client.downloadPathRemote ?? null,
-			client.tempPathLocal,
-			client.tempPathRemote
-		);
+		const newClientDownloadPath = getDownloadContentPath(download, queueItem.protocol);
+		const outputPath = newClientDownloadPath
+			? mapClientPathToLocal(
+					newClientDownloadPath,
+					client.downloadPathLocal,
+					client.downloadPathRemote ?? null,
+					client.tempPathLocal,
+					client.tempPathRemote
+				)
+			: null;
 
 		// Determine new status
 		const newStatus = mapDownloadStatusToQueueStatus(download.status, download.progress);
@@ -1532,7 +1582,6 @@ export class DownloadMonitorService extends EventEmitter implements BackgroundSe
 		const oldProgress = parseFloat(queueItem.progress || '0');
 		const progressChanged = Math.abs(download.progress - oldProgress) > 0.001;
 		const statusChanged = queueItem.status !== newStatus;
-		const newClientDownloadPath = download.contentPath || download.savePath;
 		const pathChanged =
 			queueItem.clientDownloadPath !== newClientDownloadPath || queueItem.outputPath !== outputPath;
 
@@ -1661,6 +1710,104 @@ export class DownloadMonitorService extends EventEmitter implements BackgroundSe
 		}
 	}
 
+	private async isSafeRecoveryCandidate(
+		candidatePath: string,
+		queueItem: typeof downloadQueue.$inferSelect,
+		client: DownloadClient,
+		allDownloads: DownloadInfo[]
+	): Promise<boolean> {
+		const configuredRoots = [client.downloadPathLocal, client.tempPathLocal].filter(
+			(path): path is string => !!path
+		);
+		const unsafeRoots = configuredRoots.flatMap((root) => [
+			root,
+			join(root, client.movieCategory),
+			join(root, client.tvCategory)
+		]);
+
+		if (unsafeRoots.some((root) => isSamePath(root, candidatePath))) {
+			logger.warn(
+				{ title: queueItem.title, candidatePath },
+				'Refusing recovery from a download-client root directory'
+			);
+			return false;
+		}
+
+		const activeOwner = allDownloads.find((download) => {
+			if (download.hash === queueItem.downloadId || download.hash === queueItem.infoHash)
+				return false;
+			if (download.progress >= 1 || download.status === 'error') return false;
+			const clientPath = download.contentPath || download.savePath;
+			if (!clientPath) return false;
+			const ownedPath = mapClientPathToLocal(
+				clientPath,
+				client.downloadPathLocal,
+				client.downloadPathRemote ?? null,
+				client.tempPathLocal,
+				client.tempPathRemote
+			);
+			return (
+				isSameOrDescendant(candidatePath, ownedPath) || isSameOrDescendant(ownedPath, candidatePath)
+			);
+		});
+
+		if (activeOwner) {
+			logger.warn(
+				{ title: queueItem.title, candidatePath, owningHash: activeOwner.hash },
+				'Refusing recovery from a path claimed by an active download'
+			);
+			return false;
+		}
+
+		const progress = Number(queueItem.progress ?? 0);
+		if (queueItem.protocol === 'torrent' && progress < 1) {
+			logger.warn(
+				{ title: queueItem.title, candidatePath, progress },
+				'Refusing recovery of a torrent that was not observed complete'
+			);
+			return false;
+		}
+
+		try {
+			const footprint = await getPathFootprint(candidatePath);
+			if (footprint.fileCount === 0) return false;
+
+			const expectedSize = queueItem.size ?? 0;
+			if (expectedSize > 0 && footprint.logicalBytes < expectedSize * 0.98) {
+				logger.warn(
+					{
+						title: queueItem.title,
+						candidatePath,
+						expectedSize,
+						actualSize: footprint.logicalBytes
+					},
+					'Refusing recovery because downloaded content is smaller than expected'
+				);
+				return false;
+			}
+
+			if (
+				footprint.logicalBytes >= 1024 * 1024 &&
+				footprint.allocatedBytes < footprint.logicalBytes * 0.98
+			) {
+				logger.warn(
+					{
+						title: queueItem.title,
+						candidatePath,
+						logicalBytes: footprint.logicalBytes,
+						allocatedBytes: footprint.allocatedBytes
+					},
+					'Refusing recovery of sparse, incomplete content'
+				);
+				return false;
+			}
+
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	/**
 	 * Mark a recovered missing download as completed and request import.
 	 * Shared by the initial recovery path and the awaiting backoff retry so
@@ -1758,12 +1905,11 @@ export class DownloadMonitorService extends EventEmitter implements BackgroundSe
 			// original path after the client already dropped the download. This
 			// works even when the client has no downloadPathLocal configured.
 			if (queueItem.outputPath) {
-				try {
-					await stat(queueItem.outputPath);
+				if (
+					await this.isSafeRecoveryCandidate(queueItem.outputPath, queueItem, client, allDownloads)
+				) {
 					await this.completeRecoveredDownload(queueItem.id, { completedAtFallback });
 					return;
-				} catch {
-					// Not there yet, try Tier 2
 				}
 			}
 
@@ -1775,17 +1921,15 @@ export class DownloadMonitorService extends EventEmitter implements BackgroundSe
 					client.downloadPathLocal,
 					category
 				);
-				if (recoveryPath) {
-					try {
-						await stat(recoveryPath);
-						await this.completeRecoveredDownload(queueItem.id, {
-							outputPath: recoveryPath,
-							completedAtFallback
-						});
-						return;
-					} catch {
-						// Still not there, increment and continue
-					}
+				if (
+					recoveryPath &&
+					(await this.isSafeRecoveryCandidate(recoveryPath, queueItem, client, allDownloads))
+				) {
+					await this.completeRecoveredDownload(queueItem.id, {
+						outputPath: recoveryPath,
+						completedAtFallback
+					});
+					return;
 				}
 			}
 
@@ -1942,49 +2086,13 @@ export class DownloadMonitorService extends EventEmitter implements BackgroundSe
 		// Protocol-agnostic recovery: the download vanished from the client.
 		// Tier 1: try stat() on the stored outputPath.
 		if (queueItem.outputPath) {
-			try {
-				await stat(queueItem.outputPath);
-
-				logger.info(
-					{
-						title: queueItem.title,
-						clientName: client.name,
-						outputPath: queueItem.outputPath
-					},
-					'Download missing from client but output path exists, queueing import'
-				);
-
-				const now = new Date().toISOString();
-				await db
-					.update(downloadQueue)
-					.set({
-						status: 'completed',
-						completedAt: queueItem.completedAt ?? now,
-						errorMessage: null
-					})
-					.where(eq(downloadQueue.id, queueItem.id));
-
-				const recoveredItem = await this.getQueueItem(queueItem.id);
-				if (recoveredItem) {
-					this.emit('queue:completed', recoveredItem);
-					this.emitSSE('queue:completed', recoveredItem);
-
-					const importService = await getImportService();
-					importService.requestImport(recoveredItem.id).catch((err) => {
-						logger.error(
-							{
-								queueId: recoveredItem.id,
-								title: recoveredItem.title,
-								error: err instanceof Error ? err.message : String(err)
-							},
-							'Failed to request import for recovered download'
-						);
-					});
-				}
-
+			if (
+				await this.isSafeRecoveryCandidate(queueItem.outputPath, queueItem, client, allDownloads)
+			) {
+				await this.completeRecoveredDownload(queueItem.id, {
+					completedAtFallback: queueItem.completedAt ?? new Date().toISOString()
+				});
 				return;
-			} catch {
-				// Path doesn't exist, try Tier 2
 			}
 		}
 
@@ -1996,53 +2104,15 @@ export class DownloadMonitorService extends EventEmitter implements BackgroundSe
 				client.downloadPathLocal,
 				category
 			);
-			if (recoveryPath) {
-				try {
-					await stat(recoveryPath);
-
-					logger.info(
-						{
-							title: queueItem.title,
-							clientName: client.name,
-							recoveryPath,
-							originalOutputPath: queueItem.outputPath
-						},
-						'Download recovered via client path reconstruction'
-					);
-
-					const now = new Date().toISOString();
-					await db
-						.update(downloadQueue)
-						.set({
-							outputPath: recoveryPath,
-							status: 'completed',
-							completedAt: queueItem.completedAt ?? now,
-							errorMessage: null
-						})
-						.where(eq(downloadQueue.id, queueItem.id));
-
-					const recoveredItem = await this.getQueueItem(queueItem.id);
-					if (recoveredItem) {
-						this.emit('queue:completed', recoveredItem);
-						this.emitSSE('queue:completed', recoveredItem);
-
-						const importService = await getImportService();
-						importService.requestImport(recoveredItem.id).catch((err) => {
-							logger.error(
-								{
-									queueId: recoveredItem.id,
-									title: recoveredItem.title,
-									error: err instanceof Error ? err.message : String(err)
-								},
-								'Failed to request import for recovered download'
-							);
-						});
-					}
-
-					return;
-				} catch {
-					// Recovery path doesn't exist either
-				}
+			if (
+				recoveryPath &&
+				(await this.isSafeRecoveryCandidate(recoveryPath, queueItem, client, allDownloads))
+			) {
+				await this.completeRecoveredDownload(queueItem.id, {
+					outputPath: recoveryPath,
+					completedAtFallback: queueItem.completedAt ?? new Date().toISOString()
+				});
+				return;
 			}
 		}
 
@@ -3426,13 +3496,19 @@ export class DownloadMonitorService extends EventEmitter implements BackgroundSe
 				const now = new Date().toISOString();
 				const id = randomUUID();
 
-				const outputPath = mapClientPathToLocal(
-					download.contentPath || download.savePath,
-					client.downloadPathLocal,
-					client.downloadPathRemote ?? null,
-					client.tempPathLocal,
-					client.tempPathRemote
+				const clientDownloadPath = getDownloadContentPath(
+					download,
+					historyRecord.protocol || 'torrent'
 				);
+				const outputPath = clientDownloadPath
+					? mapClientPathToLocal(
+							clientDownloadPath,
+							client.downloadPathLocal,
+							client.downloadPathRemote ?? null,
+							client.tempPathLocal,
+							client.tempPathRemote
+						)
+					: null;
 
 				await db.insert(downloadQueue).values({
 					id,
@@ -3452,7 +3528,7 @@ export class DownloadMonitorService extends EventEmitter implements BackgroundSe
 					releaseGroup: historyRecord.releaseGroup,
 					status: 'queued',
 					progress: download.progress.toString(),
-					clientDownloadPath: download.contentPath || download.savePath,
+					clientDownloadPath,
 					outputPath,
 					addedAt: historyRecord.grabbedAt || now,
 					isAutomatic: false,

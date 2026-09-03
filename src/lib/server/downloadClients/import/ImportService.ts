@@ -966,6 +966,16 @@ export class ImportService extends EventEmitter {
 		const movieFolder = join(rootFolder.path, movie.path);
 		const allowStrmProbe = movie.scoringProfileId !== 'streamer';
 		const mediaInfo = await mediaInfoService.extractMediaInfo(mainFile.path, { allowStrmProbe });
+		const mediaProbeFailure = this.getMediaProbeFailure(mainFile.path, mediaInfo);
+		if (mediaProbeFailure) {
+			result.failedFiles.push(mediaProbeFailure);
+			result.error = mediaProbeFailure.error;
+			result.failureStage = 'path_resolution';
+			result.failureReason = 'path_unavailable';
+			worker.fileProcessed(basename(mainFile.path), false, mediaProbeFailure.error);
+			await downloadMonitor.markFailed(queueItem.id, mediaProbeFailure.error!);
+			return result;
+		}
 		const destFileName = this.buildMovieFileName(movie, mainFile.path, queueItem, mediaInfo);
 		const destPath = join(movieFolder, destFileName);
 
@@ -1643,6 +1653,8 @@ export class ImportService extends EventEmitter {
 
 		const allowStrmProbe = seriesData.scoringProfileId !== 'streamer';
 		const mediaInfo = await mediaInfoService.extractMediaInfo(videoFile.path, { allowStrmProbe });
+		const mediaProbeFailure = this.getMediaProbeFailure(videoFile.path, mediaInfo);
+		if (mediaProbeFailure) return mediaProbeFailure;
 		const destFileName = this.buildEpisodeFileName(
 			seriesData,
 			seasonNum,
@@ -2257,6 +2269,18 @@ export class ImportService extends EventEmitter {
 		};
 
 		return this.getNamingService().generateMovieFileName(namingInfo);
+	}
+
+	private getMediaProbeFailure(
+		sourcePath: string,
+		mediaInfo: Awaited<ReturnType<typeof mediaInfoService.extractMediaInfo>>
+	): ImportResult | null {
+		if (mediaInfo) return null;
+		return {
+			success: false,
+			sourcePath,
+			error: 'Media validation failed: ffprobe could not read the file'
+		};
 	}
 
 	private buildEpisodeFileName(
