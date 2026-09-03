@@ -1,0 +1,64 @@
+name: Publish issue 532 test image
+
+on:
+  push:
+    branches: [build/issue-532-test-image]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-test-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:issue-532-test"
+          docker build \
+            --build-arg APP_VERSION=issue-532-test \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --tag "$image" \
+            .
+
+      - name: Verify container health
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:issue-532-test"
+          docker run -d --name cinephage-issue-532-test \
+            -p 3000:3000 \
+            -e ORIGIN=http://localhost:3000 \
+            -e BETTER_AUTH_URL=http://localhost:3000 \
+            -e BETTER_AUTH_SECRET=issue-532-ci-healthcheck-secret \
+            "$image"
+
+          for attempt in {1..18}; do
+            if curl --fail --silent http://localhost:3000/api/health; then
+              exit 0
+            fi
+            sleep 5
+          done
+
+          docker logs cinephage-issue-532-test
+          exit 1
+
+      - name: Clean up test container
+        if: always()
+        run: docker rm --force cinephage-issue-532-test || true
+
+      - name: Publish image
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:issue-532-test"
+          docker push "$image"
