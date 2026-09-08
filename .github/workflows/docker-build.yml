@@ -124,12 +124,13 @@ jobs:
             -e BETTER_AUTH_SECRET=ci-healthcheck-secret-change-in-production \
             cinephage:test
 
-          for i in {1..12}; do
+          # First startup downloads Camoufox and GeoIP data, which can take several minutes.
+          for i in {1..60}; do
             if curl -sf http://localhost:3000/api/health; then
               echo "Health check passed"
               exit 0
             fi
-            echo "Waiting for container... ($i/12)"
+            echo "Waiting for container... ($i/60)"
             sleep 5
           done
 
