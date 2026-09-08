@@ -147,10 +147,10 @@ search:
     sort: '{{ .Config.sort }}'
     type: '{{ .Config.type }}'
   rows:
-    # Do not depend on Ztracker's presentation-table attributes or an injected
-    # tbody. The server response contains result links, but Cheerio does not
-    # match Prowlarr's stricter table hierarchy for this legacy XHTML page.
-    selector: 'tr:has(a[href*="details.php?id="][onmouseover])'
+    # Cinephage's selector engine does not reliably evaluate :has() on this
+    # legacy XHTML response. The results table has one header row, followed by
+    # torrent rows, and one final legend row.
+    selector: 'table[border="1"] > tbody > tr:nth-child(n+2):not(:last-child)'
   fields:
     category:
       selector: 'a[href^="/browse_old.php?cat="]'
@@ -165,7 +165,8 @@ search:
       attribute: onmouseover
       filters:
         - name: regexp
-          args: "<font class=\\'smalltext\\'>(.*?)</font>"
+          # The hover HTML contains backslash-escaped quotes.
+          args: 'smalltext[^>]*>(.*?)</font>'
     details:
       selector: 'a[href*="details.php?id="][onmouseover]'
       attribute: href
@@ -181,7 +182,7 @@ search:
       optional: true
       filters:
         - name: regexp
-          args: "img src=\\'(.*?)\\'"
+          args: 'img src=[^A-Za-z0-9]*(https?://[^\\''"]+)'
     imdbid:
       selector: 'a[href*="imdb.com/title/tt"]'
       attribute: href
@@ -190,7 +191,7 @@ search:
       selector: 'td:nth-child(5)'
       optional: true
     size:
-      selector: 'td:nth-child(11):has(b)'
+      selector: 'td:nth-child(11)'
       optional: true
       default: '0 B'
       remove: b
