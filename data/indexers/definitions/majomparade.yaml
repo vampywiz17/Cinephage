@@ -251,6 +251,11 @@ search:
       optional: true
     size:
       selector: 'div.torrent-card__meta-short span:nth-child(3)'
+      # The tracker uses Hungarian decimal commas (for example 10,03 GB).
+      # Cinephage otherwise strips the comma and interprets that as 1003 GB.
+      filters:
+        - name: replace
+          args: [',', '.']
     grabs:
       selector: 'a[href^="/torrent/snatches/"]'
     seeders:
