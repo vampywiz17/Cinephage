@@ -134,15 +134,16 @@ search:
     # Ztracker calls its query parameter "keywords", which is not in
     # Cinephage's meaningful-input whitelist. Embedding it in the path keeps
     # keyword and IMDb searches active without a source-code change.
-    # Prefer the release title. Ztracker's description search only finds an
-    # IMDb query when the uploader included that ID in the torrent details.
-    - path: 'browse_old.php?keywords={{ if .Keywords }}{{ .Keywords }}{{ else }}{{ .Query.IMDBID }}{{ end }}'
+    # Prefer IMDb because Ztracker indexes the ID stored on torrent detail
+    # pages in its description search. Fall back to the release title only
+    # when the request has no IMDb ID.
+    - path: 'browse_old.php?keywords={{ if .Query.IMDBID }}{{ .Query.IMDBID }}{{ else }}{{ .Keywords }}{{ end }}'
   keywordsfilters:
     - name: re_replace
       args: ['[^a-zA-Z0-9]+', '%']
   inputs:
     $raw: '{{ range .Categories }}c{{.}}=1&{{end}}'
-    search_type: '{{ if .Keywords }}t_name{{ else }}t_description{{ end }}'
+    search_type: '{{ if .Query.IMDBID }}t_description{{ else }}t_name{{ end }}'
     ts_type: '{{ if .Config.freeleech }}3{{ else }}1{{ end }}'
     sort: '{{ .Config.sort }}'
     type: '{{ .Config.type }}'
