@@ -147,7 +147,10 @@ search:
     sort: '{{ .Config.sort }}'
     type: '{{ .Config.type }}'
   rows:
-    selector: 'table[border="1"] > tbody > tr:has(a[href*="details.php?id="])'
+    # Do not depend on Ztracker's presentation-table attributes or an injected
+    # tbody. The server response contains result links, but Cheerio does not
+    # match Prowlarr's stricter table hierarchy for this legacy XHTML page.
+    selector: 'tr:has(a[href*="details.php?id="][onmouseover])'
   fields:
     category:
       selector: 'a[href^="/browse_old.php?cat="]'
